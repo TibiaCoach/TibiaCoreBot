@@ -1,53 +1,82 @@
-import { Client, GatewayIntentBits, Events } from "discord.js";
-import { CONFIG } from "./app-config.js";
+import { Client, GatewayIntentBits } from "discord.js";
+import { createClient } from "@supabase/supabase-js";
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
 });
 
-client.once(Events.ClientReady, c => {
-  console.log(`Logged in as ${c.user.tag}`);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+client.once("ready", () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  startNotificationWorker();
 });
 
-client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "link") return;
+async function startNotificationWorker() {
+  console.log("Notification worker started...");
 
-  const token = interaction.options.getString("token", true).trim();
+  setInterval(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("discord_notification_queue")
+        .select("*")
+        .eq("status", "pending")
+        .limit(5);
 
-  await interaction.deferReply({ ephemeral: true });
+      if (error) {
+        console.error("DB fetch error:", error);
+        return;
+      }
 
-  try {
-    const payload = {
-      token,
-      discord_user_id: interaction.user.id,
-      discord_username: interaction.user.username,
-      discord_global_name: interaction.user.globalName ?? ""
-    };
+      if (!data || data.length === 0) return;
 
-    const res = await fetch(CONFIG.verifyUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+      for (const notif of data) {
+        try {
+          const user = await client.users.fetch(notif.discord_user_id);
 
-    const data = await res.json().catch(() => null);
+          if (!user) {
+            throw new Error("User not found");
+          }
 
-    if (!res.ok || !data?.success) {
-      const msg = data?.message || "Nie udało się połączyć konta.";
-      await interaction.editReply({ content: `❌ ${msg}` });
-      return;
+          await user.send(`**${notif.title}**\n${notif.message}`);
+
+          const { error: updateError } = await supabase
+            .from("discord_notification_queue")
+            .update({
+              status: "sent",
+              sent_at: new Date().toISOString(),
+            })
+            .eq("id", notif.id);
+
+          if (updateError) {
+            console.error("Update sent status error:", updateError);
+          } else {
+            console.log("Sent notification:", notif.id);
+          }
+        } catch (err) {
+          console.error("Send error:", err?.message || err);
+
+          const { error: failError } = await supabase
+            .from("discord_notification_queue")
+            .update({
+              status: "failed",
+              error_message: err?.message || String(err),
+              attempts: (notif.attempts || 0) + 1,
+            })
+            .eq("id", notif.id);
+
+          if (failError) {
+            console.error("Update failed status error:", failError);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Worker error:", err);
     }
+  }, 5000);
+}
 
-    await interaction.editReply({
-      content: "✅ Konto Discord zostało połączone z TibiaCore."
-    });
-  } catch (e) {
-    console.error("Link command error:", e);
-    await interaction.editReply({
-      content: "❌ Błąd serwera podczas łączenia konta."
-    });
-  }
-});
-
-client.login(CONFIG.discordToken);
+client.login(process.env.DISCORD_BOT_TOKEN);
