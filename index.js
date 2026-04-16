@@ -1,11 +1,6 @@
 import { Client, GatewayIntentBits, Events } from "discord.js";
 import { CONFIG } from "./app-config.js";
 
-if (!CONFIG.discordToken) {
-  console.error("Brak DISCORD_BOT_TOKEN w environment variables.");
-  process.exit(1);
-}
-
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
@@ -20,7 +15,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
   const token = interaction.options.getString("token", true).trim();
 
-  await interaction.deferReply({ flags: 64 });
+  await interaction.deferReply({ ephemeral: true });
 
   try {
     const payload = {
