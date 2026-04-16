@@ -17,15 +17,10 @@ const commands = [
 const rest = new REST({ version: "10" }).setToken(CONFIG.discordToken);
 
 async function main() {
-  if (!CONFIG.discordToken) {
-    throw new Error("Brak DISCORD_BOT_TOKEN w environment variables.");
-  }
-
   await rest.put(
     Routes.applicationGuildCommands(CONFIG.clientId, CONFIG.guildId),
     { body: commands }
   );
-
   console.log("Slash commands deployed.");
 }
 
